@@ -1,86 +1,54 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
 	"net/http"
-	"strings"
 
-	"golang.org/x/net/html"
+	"github.com/PuerkitoBio/goquery"
+	"github.com/gin-gonic/gin"
 )
 
-type Response struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
-}
+const API_KEY = "demo_12345" // clé API
 
-func extractText(n *html.Node) string {
-	if n.Type == html.TextNode {
-		return n.Data
+func extractHandler(c *gin.Context) {
+	// Vérification de la clé API
+	key := c.Query("key")
+	if key != API_KEY {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or missing API key"})
+		return
 	}
-	var result string
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		result += extractText(c)
-	}
-	return result
-}
 
-func extractHandler(w http.ResponseWriter, r *http.Request) {
-	url := r.URL.Query().Get("url")
+
+	// Lire l'URL
+	url := c.Query("url")
 	if url == "" {
-		http.Error(w, "Missing url parameter", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing url parameter"})
 		return
 	}
 
 	resp, err := http.Get(url)
-	if err != nil || resp.StatusCode != 200 {
-		http.Error(w, "Failed to fetch page", http.StatusBadGateway)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch url"})
 		return
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	doc, err := html.Parse(strings.NewReader(string(body)))
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		http.Error(w, "Failed to parse HTML", http.StatusInternalServerError)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to parse page"})
 		return
 	}
 
-	title := ""
-	var contentBuilder strings.Builder
+	title := doc.Find("title").First().Text()
+	text := doc.Find("p").Text()
 
-	var parse func(*html.Node)
-	parse = func(n *html.Node) {
-		if n.Type == html.ElementNode {
-			if n.Data == "title" && n.FirstChild != nil {
-				title = n.FirstChild.Data
-			}
-			if n.Data == "p" {
-				contentBuilder.WriteString(extractText(n) + "\n")
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			parse(c)
-		}
-	}
-
-	parse(doc)
-
-	json.NewEncoder(w).Encode(Response{
-		Title:   title,
-		Content: contentBuilder.String(),
+	c.JSON(http.StatusOK, gin.H{
+		"title": title,
+		"text":  text,
 	})
 }
 
 func main() {
-	http.HandleFunc("/extract", extractHandler)
-
-	// Servir fichiers statiques
-	fs := http.FileServer(http.Dir("."))
-	http.Handle("/", fs)
-
-	fmt.Println("Server running on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	router := gin.Default()
+	router.GET("/extract", extractHandler)
+	router.Run(":8080") // Render utilise ça
 }
